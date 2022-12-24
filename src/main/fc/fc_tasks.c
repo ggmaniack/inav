@@ -49,7 +49,6 @@
 #include "flight/pid.h"
 #include "flight/power_limits.h"
 #include "flight/rpm_filter.h"
-#include "flight/secondary_imu.h"
 #include "flight/servos.h"
 #include "flight/wind_estimator.h"
 
@@ -111,8 +110,8 @@ void taskHandleSerial(timeUs_t currentTimeUs)
 	// Capture MSP Displayport messages to determine if VTX is connected
     mspOsdSerialProcess(mspFcProcessCommand);
 #endif
-}
 
+}
 void taskUpdateBattery(timeUs_t currentTimeUs)
 {
     static timeUs_t batMonitoringLastServiced = 0;
@@ -398,9 +397,6 @@ void fcTasksInit(void)
 #if defined(USE_SMARTPORT_MASTER)
     setTaskEnabled(TASK_SMARTPORT_MASTER, true);
 #endif
-#ifdef USE_SECONDARY_IMU
-    setTaskEnabled(TASK_SECONDARY_IMU, secondaryImuConfig()->hardwareType != SECONDARY_IMU_NONE && secondaryImuState.active);
-#endif
 }
 
 cfTask_t cfTasks[TASK_COUNT] = {
@@ -625,14 +621,6 @@ cfTask_t cfTasks[TASK_COUNT] = {
     [TASK_PROGRAMMING_FRAMEWORK] = {
         .taskName = "PROGRAMMING",
         .taskFunc = programmingFrameworkUpdateTask,
-        .desiredPeriod = TASK_PERIOD_HZ(10),          // 10Hz @100msec
-        .staticPriority = TASK_PRIORITY_IDLE,
-    },
-#endif
-#ifdef USE_SECONDARY_IMU
-    [TASK_SECONDARY_IMU] = {
-        .taskName = "IMU2",
-        .taskFunc = taskSecondaryImu,
         .desiredPeriod = TASK_PERIOD_HZ(10),          // 10Hz @100msec
         .staticPriority = TASK_PRIORITY_IDLE,
     },

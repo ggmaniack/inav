@@ -76,7 +76,6 @@
 #include "flight/mixer.h"
 #include "flight/pid.h"
 #include "flight/servos.h"
-#include "flight/secondary_imu.h"
 
 #include "config/config_eeprom.h"
 #include "config/feature.h"
@@ -411,11 +410,6 @@ static bool mspFcProcessOutCommand(uint16_t cmdMSP, sbuf_t *dst, mspPostProcessF
         sbufWriteU8(dst, getHwRangefinderStatus());
         sbufWriteU8(dst, getHwPitotmeterStatus());
         sbufWriteU8(dst, getHwOpticalFlowStatus());
-#ifdef USE_SECONDARY_IMU
-        sbufWriteU8(dst, getHwSecondaryImuStatus());
-#else
-        sbufWriteU8(dst, 0);
-#endif
         break;
 
     case MSP_ACTIVEBOXES:
@@ -1535,6 +1529,7 @@ static bool mspFcProcessOutCommand(uint16_t cmdMSP, sbuf_t *dst, mspPostProcessF
     return true;
 }
 
+#ifdef USE_SAFE_HOME
 static mspResult_e mspFcSafeHomeOutCommand(sbuf_t *dst, sbuf_t *src)
 {
     const uint8_t safe_home_no = sbufReadU8(src);    // get the home number
@@ -1548,6 +1543,8 @@ static mspResult_e mspFcSafeHomeOutCommand(sbuf_t *dst, sbuf_t *src)
          return MSP_RESULT_ERROR;
     }
 }
+#endif
+
 
 static mspResult_e mspFcLogicConditionCommand(sbuf_t *dst, sbuf_t *src) {
     const uint8_t idx = sbufReadU8(src);
@@ -2474,9 +2471,9 @@ static mspResult_e mspFcProcessInCommand(uint16_t cmdMSP, sbuf_t *src)
             } else {
                 DISABLE_STATE(GPS_FIX);
             }
-            gpsSol.flags.validVelNE = 0;
-            gpsSol.flags.validVelD = 0;
-            gpsSol.flags.validEPE = 0;
+            gpsSol.flags.validVelNE = false;
+            gpsSol.flags.validVelD = false;
+            gpsSol.flags.validEPE = false;
             gpsSol.numSat = sbufReadU8(src);
             gpsSol.llh.lat = sbufReadU32(src);
             gpsSol.llh.lon = sbufReadU32(src);
@@ -2925,6 +2922,7 @@ static mspResult_e mspFcProcessInCommand(uint16_t cmdMSP, sbuf_t *src)
         return MSP_RESULT_ERROR; // will only be reached if the rollback is not ready
         break;
 #endif
+#ifdef USE_SAFE_HOME
     case MSP2_INAV_SET_SAFEHOME:
         if (dataSize == 10) {
              uint8_t i;
@@ -2938,6 +2936,7 @@ static mspResult_e mspFcProcessInCommand(uint16_t cmdMSP, sbuf_t *src)
             return MSP_RESULT_ERROR;
         }
         break;
+#endif
 
     default:
         return MSP_RESULT_ERROR;
@@ -3383,9 +3382,11 @@ bool mspFCProcessInOutCommand(uint16_t cmdMSP, sbuf_t *dst, sbuf_t *src, mspResu
         *ret = mspFcLogicConditionCommand(dst, src);
         break;
 #endif
+#ifdef USE_SAFE_HOME
     case MSP2_INAV_SAFEHOME:
         *ret = mspFcSafeHomeOutCommand(dst, src);
         break;
+#endif
 
 #ifdef USE_SIMULATOR
     case MSP_SIMULATOR:
@@ -3432,7 +3433,7 @@ bool mspFCProcessInOutCommand(uint16_t cmdMSP, sbuf_t *dst, sbuf_t *src, mspResu
 				}
 #endif
 				ENABLE_ARMING_FLAG(SIMULATOR_MODE);
-				LOG_D(SYSTEM, "Simulator enabled");
+				LOG_DEBUG(SYSTEM, "Simulator enabled");
 			}
 
 			if (dataSize >= 14) {
@@ -3444,9 +3445,9 @@ bool mspFCProcessInOutCommand(uint16_t cmdMSP, sbuf_t *dst, sbuf_t *src, mspResu
 					gpsSol.numSat = sbufReadU8(src);
 
 					if (gpsSol.fixType != GPS_NO_FIX) {
-						gpsSol.flags.validVelNE = 1;
-						gpsSol.flags.validVelD = 1;
-						gpsSol.flags.validEPE = 1;
+						gpsSol.flags.validVelNE = true;
+						gpsSol.flags.validVelD = true;
+						gpsSol.flags.validEPE = true;
 
 						gpsSol.llh.lat = sbufReadU32(src);
 						gpsSol.llh.lon = sbufReadU32(src);

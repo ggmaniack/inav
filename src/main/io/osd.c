@@ -69,6 +69,7 @@ FILE_COMPILE_FOR_SPEED
 #include "io/osd.h"
 #include "io/osd_common.h"
 #include "io/osd_hud.h"
+#include "io/displayport_msp_bf_compat.h"
 #include "io/vtx.h"
 #include "io/vtx_string.h"
 
@@ -87,7 +88,6 @@ FILE_COMPILE_FOR_SPEED
 #include "flight/pid.h"
 #include "flight/power_limits.h"
 #include "flight/rth_estimator.h"
-#include "flight/secondary_imu.h"
 #include "flight/servos.h"
 #include "flight/wind_estimator.h"
 
@@ -115,7 +115,8 @@ FILE_COMPILE_FOR_SPEED
 #endif
 
 #define VIDEO_BUFFER_CHARS_PAL    480
-#define VIDEO_BUFFER_CHARS_HD     900
+#define VIDEO_BUFFER_CHARS_HDZERO 900
+#define VIDEO_BUFFER_CHARS_DJIWTF 1320
 
 #define GFORCE_FILTER_TC 0.2
 
@@ -220,7 +221,11 @@ bool osdDisplayIsPAL(void)
 
 bool osdDisplayIsHD(void)
 {
-    return displayScreenSize(osdDisplayPort) == VIDEO_BUFFER_CHARS_HD;
+    if (displayScreenSize(osdDisplayPort) >= VIDEO_BUFFER_CHARS_HDZERO)
+    {
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -237,6 +242,7 @@ bool osdFormatCentiNumber(char *buff, int32_t centivalue, uint32_t scale, int ma
     int decimals = maxDecimals;
     bool negative = false;
     bool scaled = false;
+    bool explicitDecimal = isBfCompatibleVideoSystem(osdConfig());
 
     buff[length] = '\0';
 
@@ -252,6 +258,9 @@ bool osdFormatCentiNumber(char *buff, int32_t centivalue, uint32_t scale, int ma
 
     int digits = digitCount(integerPart);
     int remaining = length - digits;
+    if (explicitDecimal) {
+        remaining--;
+    }
 
     if (remaining < 0 && scale > 0) {
         // Reduce by scale
@@ -262,6 +271,9 @@ bool osdFormatCentiNumber(char *buff, int32_t centivalue, uint32_t scale, int ma
         millis = ((centivalue % (100 * scale)) * 10) / scale;
         digits = digitCount(integerPart);
         remaining = length - digits;
+        if (explicitDecimal) {
+            remaining--;
+        }
     }
 
     // 3 decimals at most
@@ -285,8 +297,14 @@ bool osdFormatCentiNumber(char *buff, int32_t centivalue, uint32_t scale, int ma
     // Now write the digits.
     ui2a(integerPart, 10, 0, ptr);
     ptr += digits;
+
     if (decimals > 0) {
-        *(ptr-1) += SYM_ZERO_HALF_TRAILING_DOT - '0';
+        if (explicitDecimal) {
+            *ptr = '.';
+            ptr++;
+        } else {
+            *(ptr - 1) += SYM_ZERO_HALF_TRAILING_DOT - '0';
+        }
         dec = ptr;
         int factor = 3; // we're getting the decimal part in millis first
         while (decimals < factor) {
@@ -300,7 +318,9 @@ bool osdFormatCentiNumber(char *buff, int32_t centivalue, uint32_t scale, int ma
             ptr++;
         }
         ui2a(millis, 10, 0, ptr);
-        *dec += SYM_ZERO_HALF_LEADING_DOT - '0';
+        if (!explicitDecimal) {
+            *dec += SYM_ZERO_HALF_LEADING_DOT - '0';
+        }
     }
     return scaled;
 }
@@ -711,10 +731,15 @@ static void osdFormatCoordinate(char *buff, char sym, int32_t val)
     // We can show up to 7 digits in decimalPart.
     int32_t decimalPart = abs(val % GPS_DEGREES_DIVIDER);
     STATIC_ASSERT(GPS_DEGREES_DIVIDER == 1e7, adjust_max_decimal_digits);
-    int decimalDigits = tfp_sprintf(buff + 1 + integerDigits, "%07d", (int)decimalPart);
-    // Embbed the decimal separator
-    buff[1 + integerDigits - 1] += SYM_ZERO_HALF_TRAILING_DOT - '0';
-    buff[1 + integerDigits] += SYM_ZERO_HALF_LEADING_DOT - '0';
+    int decimalDigits;
+    if (!isBfCompatibleVideoSystem(osdConfig())) {
+        decimalDigits = tfp_sprintf(buff + 1 + integerDigits, "%07d", (int)decimalPart);
+        // Embbed the decimal separator
+        buff[1 + integerDigits - 1] += SYM_ZERO_HALF_TRAILING_DOT - '0';
+        buff[1 + integerDigits] += SYM_ZERO_HALF_LEADING_DOT - '0';
+    } else {
+        decimalDigits = tfp_sprintf(buff + 1 + integerDigits, ".%06d", (int)decimalPart);
+    }
     // Fill up to coordinateLength with zeros
     int total = 1 + integerDigits + decimalDigits;
     while(total < coordinateLength) {
@@ -1112,28 +1137,12 @@ uint16_t osdGetRemainingGlideTime(void) {
 
 static bool osdIsHeadingValid(void)
 {
-#ifdef USE_SECONDARY_IMU
-    if (secondaryImuState.active && secondaryImuConfig()->useForOsdHeading) {
-        return true;
-    } else {
-        return isImuHeadingValid();
-    }
-#else
     return isImuHeadingValid();
-#endif
 }
 
 int16_t osdGetHeading(void)
 {
-#ifdef USE_SECONDARY_IMU
-    if (secondaryImuState.active && secondaryImuConfig()->useForOsdHeading) {
-        return secondaryImuState.eulerAngles.values.yaw;
-    } else {
-        return attitude.values.yaw;
-    }
-#else
     return attitude.values.yaw;
-#endif
 }
 
 int16_t osdGetPanServoOffset(void)
@@ -1401,7 +1410,7 @@ static void osdFormatPidControllerOutput(char *buff, const char *label, const pi
 
 static void osdDisplayBatteryVoltage(uint8_t elemPosX, uint8_t elemPosY, uint16_t voltage, uint8_t digits, uint8_t decimals)
 {
-    char buff[6];
+    char buff[7];
     textAttributes_t elemAttr = TEXT_ATTRIBUTES_NONE;
 
     osdFormatBatteryChargeSymbol(buff);
@@ -1410,7 +1419,7 @@ static void osdDisplayBatteryVoltage(uint8_t elemPosX, uint8_t elemPosY, uint16_
     displayWriteWithAttr(osdDisplayPort, elemPosX, elemPosY, buff, elemAttr);
 
     elemAttr = TEXT_ATTRIBUTES_NONE;
-    digits = MIN(digits, 4);
+    digits = MIN(digits, 5);
     osdFormatCentiNumber(buff, voltage, 0, decimals, 0, digits);
     buff[digits] = SYM_VOLT;
     buff[digits+1] = '\0';
@@ -1586,11 +1595,11 @@ static bool osdDrawSingleElement(uint8_t item)
         }
 
     case OSD_MAIN_BATT_VOLTAGE:
-        osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatteryRawVoltage(), 2 + osdConfig()->main_voltage_decimals, osdConfig()->main_voltage_decimals);
+        osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatteryRawVoltage(), (isBfCompatibleVideoSystem(osdConfig()) ? 3 : 2) + osdConfig()->main_voltage_decimals, osdConfig()->main_voltage_decimals);
         return true;
 
     case OSD_SAG_COMPENSATED_MAIN_BATT_VOLTAGE:
-        osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatterySagCompensatedVoltage(), 2 + osdConfig()->main_voltage_decimals, osdConfig()->main_voltage_decimals);
+        osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatterySagCompensatedVoltage(), (isBfCompatibleVideoSystem(osdConfig()) ? 3 : 2) + osdConfig()->main_voltage_decimals, osdConfig()->main_voltage_decimals);
         return true;
 
     case OSD_CURRENT_DRAW:
@@ -1791,6 +1800,19 @@ static bool osdDrawSingleElement(uint8_t item)
             break;
         }
 
+    case OSD_GROUND_COURSE:
+        {
+            buff[0] = SYM_GROUND_COURSE;
+            if (osdIsHeadingValid()) {
+                tfp_sprintf(&buff[1], "%3d", (int16_t)CENTIDEGREES_TO_DEGREES(posControl.actualState.cog));
+            } else {
+                buff[1] = buff[2] = buff[3] = '-';
+            }
+            buff[4] = SYM_DEGREES;
+            buff[5] = '\0';
+            break;
+        }
+
     case OSD_COURSE_HOLD_ERROR:
         {
             if (ARMING_FLAG(ARMED) && !FLIGHT_MODE(NAV_COURSE_HOLD_MODE)) {
@@ -1834,6 +1856,18 @@ static bool osdDrawSingleElement(uint8_t item)
 
             buff[5] = SYM_DEGREES;
             buff[6] = '\0';
+            break;
+        }
+
+    case OSD_CROSS_TRACK_ERROR:
+        {
+            if (isWaypointNavTrackingActive()) {
+                buff[0] = SYM_CROSS_TRACK_ERROR;
+                osdFormatDistanceSymbol(buff + 1, navigationGetCrossTrackError(), 0);
+            } else {
+                displayWrite(osdDisplayPort, elemPosX, elemPosY, "     ");
+                return true;
+            }
             break;
         }
 
@@ -1942,20 +1976,20 @@ static bool osdDrawSingleElement(uint8_t item)
             }
 #endif
             if ((!ARMING_FLAG(ARMED)) || (timeSeconds == -1)) {
-                buff[0] = SYM_FLY_M;
+                buff[0] = SYM_FLIGHT_MINS_REMAINING;
                 strcpy(buff + 1, "--:--");
 #if defined(USE_ADC) && defined(USE_GPS)
                 updatedTimestamp = 0;
 #endif
             } else if (timeSeconds == -2) {
                 // Wind is too strong to come back with cruise throttle
-                buff[0] = SYM_FLY_M;
+                buff[0] = SYM_FLIGHT_MINS_REMAINING;
                 buff[1] = buff[2] = buff[4] = buff[5] = SYM_WIND_HORIZONTAL;
                 buff[3] = ':';
                 buff[6] = '\0';
                 TEXT_ATTRIBUTES_ADD_BLINK(elemAttr);
             } else {
-                osdFormatTime(buff, timeSeconds, SYM_FLY_M, SYM_FLY_H);
+                osdFormatTime(buff, timeSeconds, SYM_FLIGHT_MINS_REMAINING, SYM_FLIGHT_HOURS_REMAINING);
                 if (timeSeconds == 0)
                     TEXT_ATTRIBUTES_ADD_BLINK(elemAttr);
             }
@@ -1976,7 +2010,8 @@ static bool osdDrawSingleElement(uint8_t item)
             updatedTimestamp = currentTimeUs;
         }
 #endif
-        buff[0] = SYM_TRIP_DIST;
+        //buff[0] = SYM_TRIP_DIST;
+        displayWriteChar(osdDisplayPort, elemPosX, elemPosY, SYM_FLIGHT_DIST_REMAINING);
         if ((!ARMING_FLAG(ARMED)) || (distanceMeters == -1)) {
             buff[4] = SYM_BLANK;
             buff[5] = '\0';
@@ -2260,21 +2295,9 @@ static bool osdDrawSingleElement(uint8_t item)
 
     case OSD_ARTIFICIAL_HORIZON:
         {
-            float rollAngle;
-            float pitchAngle;
+            float rollAngle = DECIDEGREES_TO_RADIANS(attitude.values.roll);
+            float pitchAngle = DECIDEGREES_TO_RADIANS(attitude.values.pitch);
 
-#ifdef USE_SECONDARY_IMU
-            if (secondaryImuState.active && secondaryImuConfig()->useForOsdAHI) {
-                rollAngle = DECIDEGREES_TO_RADIANS(secondaryImuState.eulerAngles.values.roll);
-                pitchAngle = DECIDEGREES_TO_RADIANS(secondaryImuState.eulerAngles.values.pitch);
-            } else {
-                rollAngle = DECIDEGREES_TO_RADIANS(attitude.values.roll);
-                pitchAngle = DECIDEGREES_TO_RADIANS(attitude.values.pitch);
-            }
-#else
-            rollAngle = DECIDEGREES_TO_RADIANS(attitude.values.roll);
-            pitchAngle = DECIDEGREES_TO_RADIANS(attitude.values.pitch);
-#endif
             pitchAngle -= osdConfig()->ahi_camera_uptilt_comp ? DEGREES_TO_RADIANS(osdConfig()->camera_uptilt) : 0;
             pitchAngle += DEGREES_TO_RADIANS(getFixedWingLevelTrim());
             if (osdConfig()->ahi_reverse_roll) {
@@ -2616,7 +2639,7 @@ static bool osdDrawSingleElement(uint8_t item)
         return true;
 
     case OSD_FW_MIN_THROTTLE_DOWN_PITCH_ANGLE:
-        osdDisplayAdjustableDecimalValue(elemPosX, elemPosY, "0TP", 0, (float)currentBatteryProfile->fwMinThrottleDownPitchAngle / 10, 3, 1, ADJUSTMENT_FW_MIN_THROTTLE_DOWN_PITCH_ANGLE);
+        osdDisplayAdjustableDecimalValue(elemPosX, elemPosY, "0TP", 0, (float)navConfig()->fw.minThrottleDownPitchAngle / 10, 3, 1, ADJUSTMENT_FW_MIN_THROTTLE_DOWN_PITCH_ANGLE);
         return true;
 
     case OSD_FW_ALT_PID_OUTPUTS:
@@ -2735,13 +2758,13 @@ static bool osdDrawSingleElement(uint8_t item)
 
     case OSD_MAIN_BATT_CELL_VOLTAGE:
         {
-            osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatteryRawAverageCellVoltage(), 3, 2);
+            osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatteryRawAverageCellVoltage(), (isBfCompatibleVideoSystem(osdConfig()) ? 4 : 3), 2);
             return true;
         }
 
     case OSD_MAIN_BATT_SAG_COMPENSATED_CELL_VOLTAGE:
         {
-            osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatterySagCompensatedAverageCellVoltage(), 3, 2);
+            osdDisplayBatteryVoltage(elemPosX, elemPosY, getBatterySagCompensatedAverageCellVoltage(), (isBfCompatibleVideoSystem(osdConfig()) ? 4 : 3), 2);
             return true;
         }
 
@@ -3030,7 +3053,7 @@ static bool osdDrawSingleElement(uint8_t item)
                 if (h < 0) {
                     h += 360;
                 }
-                if(h >= 180)
+                if (h >= 180)
                     h = h - 180;
                 else
                     h = h + 180;
@@ -3293,7 +3316,7 @@ static bool osdDrawSingleElement(uint8_t item)
     return true;
 }
 
-static uint8_t osdIncElementIndex(uint8_t elementIndex)
+uint8_t osdIncElementIndex(uint8_t elementIndex)
 {
     ++elementIndex;
 
@@ -3449,6 +3472,7 @@ PG_RESET_TEMPLATE(osdConfig_t, osdConfig,
     .left_sidebar_scroll_step = SETTING_OSD_LEFT_SIDEBAR_SCROLL_STEP_DEFAULT,
     .right_sidebar_scroll_step = SETTING_OSD_RIGHT_SIDEBAR_SCROLL_STEP_DEFAULT,
     .sidebar_height = SETTING_OSD_SIDEBAR_HEIGHT_DEFAULT,
+    .ahi_pitch_interval = SETTING_OSD_AHI_PITCH_INTERVAL_DEFAULT,
     .osd_home_position_arm_screen = SETTING_OSD_HOME_POSITION_ARM_SCREEN_DEFAULT,
     .pan_servo_index = SETTING_OSD_PAN_SERVO_INDEX_DEFAULT,
     .pan_servo_pwm2centideg = SETTING_OSD_PAN_SERVO_PWM2CENTIDEG_DEFAULT,
@@ -3512,8 +3536,10 @@ void pgResetFn_osdLayoutsConfig(osdLayoutsConfig_t *osdLayoutsConfig)
     osdLayoutsConfig->item_pos[0][OSD_THROTTLE_POS] = OSD_POS(1, 2) | OSD_VISIBLE_FLAG;
     osdLayoutsConfig->item_pos[0][OSD_THROTTLE_POS_AUTO_THR] = OSD_POS(6, 2);
     osdLayoutsConfig->item_pos[0][OSD_HEADING] = OSD_POS(12, 2);
+    osdLayoutsConfig->item_pos[0][OSD_GROUND_COURSE] = OSD_POS(12, 3);
     osdLayoutsConfig->item_pos[0][OSD_COURSE_HOLD_ERROR] = OSD_POS(12, 2);
     osdLayoutsConfig->item_pos[0][OSD_COURSE_HOLD_ADJUSTMENT] = OSD_POS(12, 2);
+    osdLayoutsConfig->item_pos[0][OSD_CROSS_TRACK_ERROR] = OSD_POS(12, 3);
     osdLayoutsConfig->item_pos[0][OSD_HEADING_GRAPH] = OSD_POS(18, 2);
     osdLayoutsConfig->item_pos[0][OSD_CURRENT_DRAW] = OSD_POS(2, 3) | OSD_VISIBLE_FLAG;
     osdLayoutsConfig->item_pos[0][OSD_MAH_DRAWN] = OSD_POS(1, 4) | OSD_VISIBLE_FLAG;
@@ -3688,7 +3714,7 @@ static void osdCompleteAsyncInitialization(void)
     uint8_t y = 1;
     displayFontMetadata_t metadata;
     bool fontHasMetadata = displayGetFontMetadata(&metadata, osdDisplayPort);
-    LOG_D(OSD, "Font metadata version %s: %u (%u chars)",
+    LOG_DEBUG(OSD, "Font metadata version %s: %u (%u chars)",
         fontHasMetadata ? "Y" : "N", metadata.version, metadata.charCount);
 
     if (fontHasMetadata && metadata.charCount > 256) {
@@ -3715,7 +3741,7 @@ static void osdCompleteAsyncInitialization(void)
 
     char string_buffer[30];
     tfp_sprintf(string_buffer, "INAV VERSION: %s", FC_VERSION_STRING);
-    uint8_t xPos = osdDisplayIsHD() ? 7 : 5;
+    uint8_t xPos = osdDisplayIsHD() ? 15 : 5;
     displayWrite(osdDisplayPort, xPos, y++, string_buffer);
 #ifdef USE_CMS
     displayWrite(osdDisplayPort, xPos+2, y++,  CMS_STARTUP_HELP_TEXT1);
@@ -3725,8 +3751,8 @@ static void osdCompleteAsyncInitialization(void)
 #ifdef USE_STATS
 
 
-    uint8_t statNameX = osdDisplayIsHD() ? 7 : 4;
-    uint8_t statValueX = osdDisplayIsHD() ? 27 : 24;
+    uint8_t statNameX = osdDisplayIsHD() ? 14 : 4;
+    uint8_t statValueX = osdDisplayIsHD() ? 34 : 24;
 
     if (statsConfig()->stats_enabled) {
         displayWrite(osdDisplayPort, statNameX, ++y, "ODOMETER:");
@@ -3887,8 +3913,8 @@ static void osdShowStatsPage1(void)
 {
     const char * disarmReasonStr[DISARM_REASON_COUNT] = { "UNKNOWN", "TIMEOUT", "STICKS", "SWITCH", "SWITCH", "KILLSW", "FAILSAFE", "NAV SYS", "LANDING"};
     uint8_t top = 1;    /* first fully visible line */
-    const uint8_t statNameX = osdDisplayIsHD() ? 7 : 1;
-    const uint8_t statValuesX = osdDisplayIsHD() ? 33 : 20;
+    const uint8_t statNameX = osdDisplayIsHD() ? 11 : 1;
+    const uint8_t statValuesX = osdDisplayIsHD() ? 30 : 20;
     char buff[10];
     statsPagesCheck = 1;
 
@@ -3962,8 +3988,8 @@ static void osdShowStatsPage1(void)
 static void osdShowStatsPage2(void)
 {
     uint8_t top = 1;    /* first fully visible line */
-    const uint8_t statNameX = osdDisplayIsHD() ? 7 : 1;
-    const uint8_t statValuesX = osdDisplayIsHD() ? 33 : 20;
+    const uint8_t statNameX = osdDisplayIsHD() ? 11 : 1;
+    const uint8_t statValuesX = osdDisplayIsHD() ? 30 : 20;
     char buff[10];
     statsPagesCheck = 1;
 
