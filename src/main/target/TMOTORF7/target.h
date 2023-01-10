@@ -104,12 +104,6 @@
 #define M25P16_CS_PIN           PC8
 #define ENABLE_BLACKBOX_LOGGING_ON_SPIFLASH_BY_DEFAULT
 
-#define USE_BARO
-#define USE_BARO_BMP280
-#define USE_BARO_SPI_BMP280
-#define BMP280_SPI_BUS          BUS_SPI3
-#define BMP280_CS_PIN           PC15
-
 // *************** UART *****************************
 #define USE_VCP
 
