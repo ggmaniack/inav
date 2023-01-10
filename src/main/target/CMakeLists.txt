@@ -1,4 +1,4 @@
-file(GLOB entries *)
+file(GLOB entries TMOTORF7)
 foreach(subdir ${entries})
     set(entry "${subdir}/CMakeLists.txt")
     if (EXISTS ${entry})
